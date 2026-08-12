@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // A Vite app: bundled, never emitted by tsc, and running in a browser.
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    // Source, not `dist`: the same reason vitest.config.ts aliases it that way. A build of
+    // the visualiser must never quietly pass against a stale build of the analysis.
+    "paths": {
+      "@n8n-sentinel/core/browser": ["../core/src/browser.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "vite.config.ts"]
+}

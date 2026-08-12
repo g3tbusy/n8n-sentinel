@@ -1,0 +1,13 @@
+{
+  "name": "@n8n-sentinel/range",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Red-team полигон: уязвимый агент, корпус атак и замер Attack Success Rate",
+  "scripts": {
+    "range": "node run.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}

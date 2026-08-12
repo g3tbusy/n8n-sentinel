@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>n8n-sentinel — куда недоверенный ввод доходит до действия</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23a4243b'/%3E%3Cpath d='M9 16h6l2-5 3 10 2-5h1' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" />
+          <path d="M9 16h6l2-5 3 10 2-5h1" />
+        </svg>
+        <span class="brand-name">n8n-sentinel</span>
+      </div>
+
+      <div class="workflow" id="workflow">
+        <span class="workflow-name" id="workflow-name">Воркфлоу не загружен</span>
+        <span class="workflow-meta" id="workflow-meta"></span>
+      </div>
+
+      <div class="actions">
+        <label class="select">
+          <span class="select-label">Пример</span>
+          <select id="demo" aria-label="Загрузить пример воркфлоу"></select>
+        </label>
+        <button type="button" id="open" class="button">Открыть JSON…</button>
+        <input type="file" id="file" accept="application/json,.json" hidden />
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="stage" id="stage">
+        <svg id="canvas" class="canvas" aria-label="Граф воркфлоу"></svg>
+
+        <div class="stage-controls">
+          <button type="button" class="icon-button" data-view="out" title="Отдалить">−</button>
+          <button type="button" class="icon-button" data-view="in" title="Приблизить">+</button>
+          <button type="button" class="icon-button wide" data-view="fit" title="Вписать в экран">
+            Вписать
+          </button>
+        </div>
+
+        <div class="stage-legend" id="legend">
+          <span class="key"><i class="swatch source"></i>недоверенный ввод</span>
+          <span class="key"><i class="swatch agent"></i>модель с инструментами</span>
+          <span class="key"><i class="swatch sink"></i>действие</span>
+          <span class="key"><i class="swatch gate"></i>гейт</span>
+          <span class="key"><i class="swatch derived"></i>выведенное ребро</span>
+        </div>
+
+        <div class="dropzone" id="dropzone" hidden>
+          <div class="dropzone-inner">Бросьте сюда JSON воркфлоу</div>
+        </div>
+
+        <div class="empty" id="empty">
+          <h1>Бросьте сюда воркфлоу n8n</h1>
+          <p>
+            Или вставьте его по <kbd>⌘V</kbd>, или выберите пример выше. Воркфлоу разбирается и
+            анализируется прямо в этой странице: он никуда не загружается, и этот файл вообще не
+            делает сетевых запросов.
+          </p>
+        </div>
+      </section>
+
+      <aside class="panel" id="panel" aria-label="Находки"></aside>
+    </main>
+  </body>
+</html>

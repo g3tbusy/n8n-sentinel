@@ -1,0 +1,70 @@
+# Параметры, чьё *содержимое* решает, что нода делает, а не только что она говорит.
+#
+# Различие, которое проводит этот файл: `text` у ноды Telegram несёт недоверенные данные в
+# сообщение — для этого сообщения и существуют. `url` у HTTP-ноды несёт их в выбор того, кто
+# получит запрос. Позицией инъекции является только второе, и есть она только у этих типов нод.
+#
+# Данные, как и nodes.yaml. Добавить покрытие — правка здесь, а не изменение кода. Каждый
+# перечисленный тип сверяется с каталогом n8n тестом целостности в expressions.test.ts, так что
+# правило, называющее несуществующую ноду, роняет сборку вместо того, чтобы выглядеть покрытием.
+params:
+  # ------------------------------------------------------------- куда уходит запрос
+  - kind: url
+    paths: [url, endpoint]
+    types:
+      - n8n-nodes-base.httpRequest
+      - n8n-nodes-base.httpRequestTool
+      - '@n8n/n8n-nodes-langchain.toolHttpRequest'
+      - n8n-nodes-base.graphql
+      - n8n-nodes-base.webhook
+
+  # ---------------------------------------------------- что едет вместе с запросом
+  # Заголовки и тела — то место, через которое секрет из $env покидает здание.
+  - kind: egress-payload
+    paths:
+      - jsonBody
+      - body
+      - 'headerParameters.parameters[].value'
+      - 'queryParameters.parameters[].value'
+      - 'bodyParameters.parameters[].value'
+      - 'options.query[].value'
+      - 'sendHeaders.headerParameters.parameters[].value'
+    types:
+      - n8n-nodes-base.httpRequest
+      - n8n-nodes-base.httpRequestTool
+      - '@n8n/n8n-nodes-langchain.toolHttpRequest'
+      - n8n-nodes-base.graphql
+
+  # --------------------------------------------------------- запросы, а не значения
+  # Эти ноды принимают SQL текстом. Все остальные ноды баз данных в реестре принимают имя
+  # таблицы и раскладку колонок, а это не позиция инъекции.
+  - kind: sql
+    paths: [query]
+    types:
+      - n8n-nodes-base.postgres
+      - n8n-nodes-base.postgresTool
+      - n8n-nodes-base.mySql
+      - n8n-nodes-base.mySqlTool
+      - n8n-nodes-base.microsoftSql
+      - n8n-nodes-base.snowflake
+      - n8n-nodes-base.questDb
+      - n8n-nodes-base.crateDb
+      - n8n-nodes-base.timescaleDb
+
+  # ------------------------------------------------------- shell на машине с n8n
+  - kind: command
+    paths: [command, cwd]
+    types:
+      - n8n-nodes-base.executeCommand
+      - n8n-nodes-base.ssh
+
+  # ------------------------------------------------ код: читается, а не вычисляется
+  # Это не поля-выражения: тело — JavaScript или Python, который сам читает `$json`.
+  # Сканируется на конструкции, превращающие строку в выполнение.
+  - kind: code
+    paths: [jsCode, pythonCode, functionCode, code]
+    types:
+      - n8n-nodes-base.code
+      - n8n-nodes-base.function
+      - n8n-nodes-base.functionItem
+      - '@n8n/n8n-nodes-langchain.toolCode'

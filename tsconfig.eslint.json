@@ -1,0 +1,18 @@
+{
+  // Type information for everything the build does not emit: tests and tooling.
+  // Used by ESLint's typed rules and by `pnpm typecheck`.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  // The visualiser is a browser app with its own lib and module resolution; it is checked
+  // by `packages/web/tsconfig.json`, which `pnpm typecheck` runs after this one.
+  "exclude": ["packages/web/**"],
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts"]
+}

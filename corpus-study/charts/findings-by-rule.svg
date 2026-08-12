@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="292" viewBox="0 0 760 292" role="img" aria-label="Находки по правилам">
+<rect width="760" height="292" fill="#fbfaf8"/>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}</style>
+<text x="16" y="26" font-size="15" font-weight="600" fill="#1b1b1b">Находки по правилам</text>
+<text x="16" y="46" font-size="12" fill="#6b6b6b">49 085 находок в 11 070 воркфлоу</text>
+<text x="258" y="82" font-size="12" text-anchor="end" fill="#1b1b1b">UNGATED_SIDE_EFFECT</text>
+<rect x="266" y="71" width="434" height="15" rx="2" fill="#3f5e78"/>
+<text x="706" y="83" font-size="11" fill="#6b6b6b">29657 (60.4%)</text>
+<text x="258" y="108" font-size="12" text-anchor="end" fill="#1b1b1b">INDIRECT_PROMPT_INJECTION</text>
+<rect x="266" y="97" width="195" height="15" rx="2" fill="#3f5e78"/>
+<text x="467" y="109" font-size="11" fill="#6b6b6b">13321 (27.1%)</text>
+<text x="258" y="134" font-size="12" text-anchor="end" fill="#1b1b1b">EXPRESSION_SSRF</text>
+<rect x="266" y="123" width="64" height="15" rx="2" fill="#3f5e78"/>
+<text x="336" y="135" font-size="11" fill="#6b6b6b">4372 (8.9%)</text>
+<text x="258" y="160" font-size="12" text-anchor="end" fill="#1b1b1b">MISSING_HUMAN_APPROVAL</text>
+<rect x="266" y="149" width="17" height="15" rx="2" fill="#3f5e78"/>
+<text x="289" y="161" font-size="11" fill="#6b6b6b">1155 (2.4%)</text>
+<text x="258" y="186" font-size="12" text-anchor="end" fill="#1b1b1b">SECRET_EXFIL_RISK</text>
+<rect x="266" y="175" width="3" height="15" rx="2" fill="#3f5e78"/>
+<text x="275" y="187" font-size="11" fill="#6b6b6b">238 (0.5%)</text>
+<text x="258" y="212" font-size="12" text-anchor="end" fill="#1b1b1b">OVERBROAD_TOOL_ACCESS</text>
+<rect x="266" y="201" width="2" height="15" rx="2" fill="#3f5e78"/>
+<text x="274" y="213" font-size="11" fill="#6b6b6b">163 (0.3%)</text>
+<text x="258" y="238" font-size="12" text-anchor="end" fill="#1b1b1b">EXPRESSION_RCE</text>
+<rect x="266" y="227" width="2" height="15" rx="2" fill="#3f5e78"/>
+<text x="274" y="239" font-size="11" fill="#6b6b6b">114 (0.2%)</text>
+<text x="258" y="264" font-size="12" text-anchor="end" fill="#1b1b1b">EXPRESSION_SQLI</text>
+<rect x="266" y="253" width="1" height="15" rx="2" fill="#3f5e78"/>
+<text x="273" y="265" font-size="11" fill="#6b6b6b">65 (0.1%)</text>
+</svg>

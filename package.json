@@ -1,0 +1,36 @@
+{
+  "name": "n8n-sentinel-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build --force && tsc -p tsconfig.eslint.json && tsc -p packages/web/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "web:dev": "pnpm --filter @n8n-sentinel/web dev",
+    "web:build": "pnpm --filter @n8n-sentinel/web build",
+    "corpus:study": "pnpm build && node scripts/corpus-study.mjs",
+    "corpus:fetch": "node scripts/fetch-corpus.mjs",
+    "fixtures:select": "node scripts/select-fixtures.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.0"
+  }
+}

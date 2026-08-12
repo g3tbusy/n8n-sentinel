@@ -1,0 +1,40 @@
+# Демонстрация Action на самом себе: сканирует фикстуры кодом из этого pull request.
+#
+# Сканер собирается из исходников ветки, поэтому проверяется именно её код.
+name: Демонстрация Action
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write # SARIF в Security tab
+  pull-requests: write # комментарий со сводкой
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Фикстуры — настоящие воркфлоу из официальной библиотеки шаблонов n8n, и находки
+      # относятся к ним, а не к коду этого репозитория. Поэтому сборку они не роняют:
+      # continue-on-error оставляет Action право вернуть 1, но не превращает чужие воркфлоу в
+      # причину красной галочки.
+      - name: Скан фикстур
+        id: sentinel
+        continue-on-error: true
+        uses: ./
+        with:
+          path: fixtures/real
+          fail-on: critical
+          upload-sarif: 'true'
+          comment: 'true'
+
+      - name: Что нашли
+        shell: bash
+        run: |
+          echo "находок: ${{ steps.sentinel.outputs.findings }}"
+          echo "critical: ${{ steps.sentinel.outputs.critical }}"
+          echo "код возврата сканера: ${{ steps.sentinel.outputs.exit-code }}"

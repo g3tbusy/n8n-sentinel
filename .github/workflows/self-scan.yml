@@ -1,0 +1,49 @@
+# Сканирует закоммиченные фикстуры самим сканером и загружает SARIF.
+#
+# Две цели: доказать, что SARIF, который пишет этот инструмент, GitHub принимает, — и увидеть
+# находки в том виде, в каком их увидит пользователь. Фикстуры это настоящие воркфлоу из
+# официальной библиотеки шаблонов n8n, поэтому поднимаемые оповещения относятся к тем
+# воркфлоу, а не к коду этого репозитория.
+#
+# Проверено на живом прогоне: Code Scanning принимает наш SARIF, 94 результата под категорией
+# n8n-sentinel, severity раскладываются по полосам critical/high/medium/low.
+name: Самосканирование
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Без --fail-on: эта задача существует, чтобы опубликовать находки, а не чтобы
+      # блокировать сборку из-за воркфлоу, написанных кем-то другим. Код 2 означал бы, что файл
+      # не удалось прочитать, — вот это должно ронять сборку.
+      - name: Скан фикстур
+        run: node packages/cli/dist/index.js scan fixtures/real --format sarif > sentinel.sarif
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sentinel.sarif
+          category: n8n-sentinel

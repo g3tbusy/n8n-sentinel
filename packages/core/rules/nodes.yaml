@@ -1,0 +1,1203 @@
+# Классификация нод для taint-анализа.
+#
+# Этот файл — данные. Добавить покрытие для типа ноды значит поправить YAML, а не код.
+#
+# roles      source | sink | propagator | sanitizer   (нода может держать несколько)
+# source     trust: untrusted-public | untrusted-external | semi-trusted
+# sink       effect: send-message | publish-content | write-database | write-file |
+#                    delete-data | http-egress | execute-code | execute-command |
+#                    payment | admin-api | disclose-response
+#            irreversible: можно ли взять действие обратно
+# sanitizer  kind: human-approval | schema-validation | conditional
+#            strength: strong (режет путь) | weak (только может — решает фаза 4)
+# llm        нода запускает модель
+# invokesTools  нода может решить вызвать инструменты; именно это превращает инъекцию в
+#               действие, и это предусловие флагманского чекера
+#
+# `variants` сопоставляются с параметрами УЖЕ ПОСЛЕ применения дефолтов самого n8n (см.
+# rules/node-defaults.json). Это важно: n8n не сохраняет параметры, оставленные по умолчанию,
+# поэтому отсутствующий `operation` у ноды Gmail означает `send`, а не «неизвестно».
+#
+# Имена операций сверяются с каталогом n8n тестом rules.test.ts: опечатка здесь — мёртвое
+# правило, а мёртвое правило — пропущенная находка.
+
+nodes:
+  # ------------------------------------------------------------ триггеры: публичные
+  - type: n8n-nodes-base.webhook
+    roles: [source]
+    source: { trust: untrusted-public }
+    note: Публично доступная HTTP-точка входа; весь запрос подконтролен атакующему.
+
+  - type: n8n-nodes-base.formTrigger
+    roles: [source]
+    source: { trust: untrusted-public }
+    note: Форма на стороне n8n; отправить может любой, у кого есть URL.
+
+  - type: n8n-nodes-base.form
+    roles: [source]
+    source: { trust: untrusted-public }
+
+  - type: '@n8n/n8n-nodes-langchain.chatTrigger'
+    roles: [source]
+    source: { trust: untrusted-public }
+    note: Чат-эндпоинт, кормящий агента; каноническая точка входа prompt injection.
+
+  - type: '@n8n/n8n-nodes-langchain.mcpTrigger'
+    roles: [source]
+    source: { trust: untrusted-public }
+    note: Выставляет этот воркфлоу как MCP-сервер; вызывающие и их аргументы недоверенны.
+
+  # ------------------------------------------------- триггеры: внешние
+  - type: n8n-nodes-base.gmailTrigger
+    roles: [source]
+    source: { trust: untrusted-external }
+    note: Написать в отслеживаемый ящик может кто угодно.
+
+  - type: n8n-nodes-base.emailReadImap
+    roles: [source]
+    source: { trust: untrusted-external }
+    note: Написать в отслеживаемый ящик может кто угодно.
+
+  - type: n8n-nodes-base.telegramTrigger
+    roles: [source]
+    source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.whatsAppTrigger
+    roles: [source]
+    source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.slackTrigger
+    roles: [source]
+    source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.rssFeedRead
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    note: Содержимое ленты пишет тот, кто ею управляет.
+
+  - type: n8n-nodes-base.googleDriveTrigger
+    roles: [source]
+    source: { trust: untrusted-external }
+    note: Срабатывает на расшаренных файлах, которые мог загрузить любой обладатель ссылки.
+
+  - type: n8n-nodes-base.googleSheetsTrigger
+    roles: [source]
+    source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.executeWorkflowTrigger
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    note: Вход приходит из вызывающего воркфлоу; taint пересекает границу непроанализированным.
+
+  # ---------------------------------------------- триггеры: внутренние
+  - type: n8n-nodes-base.scheduleTrigger
+    roles: []
+    note: По времени; внешних данных не несёт.
+
+  - type: n8n-nodes-base.cron
+    roles: []
+
+  - type: n8n-nodes-base.manualTrigger
+    roles: []
+
+  - type: n8n-nodes-base.errorTrigger
+    roles: [propagator]
+    note: Получает данные упавшего выполнения, которые сами могут быть заражены.
+
+  # -------------------------------------------------------------- сеть
+  - type: n8n-nodes-base.httpRequest
+    roles: [source, sink, propagator]
+    source: { trust: untrusted-external }
+    sink: { effect: http-egress, irreversible: false }
+    note: >-
+      Важны оба направления: ответ — это внешние данные, входящие в воркфлоу, а сам запрос из
+      него уходит. Даже GET выносит наружу всё, что подставлено в URL.
+    variants:
+      - when: { method: [POST, PUT, PATCH, DELETE] }
+        roles: [source, sink, propagator]
+        source: { trust: untrusted-external }
+        sink: { effect: http-egress, irreversible: true }
+        note: Пишущий метод во внешний сервис отменить нельзя.
+
+  - type: n8n-nodes-base.respondToWebhook
+    roles: [sink]
+    sink: { effect: disclose-response, irreversible: true }
+    note: Возвращает данные вызывающему; канал раскрытия, а не действие.
+
+  - type: n8n-nodes-base.graphql
+    roles: [source, sink, propagator]
+    source: { trust: untrusted-external }
+    sink: { effect: http-egress, irreversible: true }
+
+  # --------------------------------------------------- выполнение кода
+  - type: n8n-nodes-base.code
+    roles: [propagator, sink]
+    sink: { effect: execute-code, irreversible: true }
+    note: Произвольный JavaScript или Python; дотянется до всего, до чего дотягивается процесс n8n.
+
+  - type: n8n-nodes-base.function
+    roles: [propagator, sink]
+    sink: { effect: execute-code, irreversible: true }
+    note: Устаревшая нода Code.
+
+  - type: n8n-nodes-base.functionItem
+    roles: [propagator, sink]
+    sink: { effect: execute-code, irreversible: true }
+
+  - type: n8n-nodes-base.executeCommand
+    roles: [sink]
+    sink: { effect: execute-command, irreversible: true }
+    note: Выполняет команду shell на машине с n8n.
+
+  - type: n8n-nodes-base.ssh
+    roles: [sink]
+    sink: { effect: execute-command, irreversible: true }
+
+  # --------------------------------------------------------------- LLM
+  - type: '@n8n/n8n-nodes-langchain.agent'
+    roles: [propagator]
+    llm: true
+    invokesTools: true
+    note: >-
+      Решает, какие подключённые инструменты вызвать и с какими аргументами. Инструкции и
+      данные для него — один и тот же поток токенов, поэтому недоверенный ввод, дошедший сюда,
+      способен управлять любым инструментом.
+
+  - type: '@n8n/n8n-nodes-langchain.agentTool'
+    roles: [propagator]
+    llm: true
+    invokesTools: true
+    noToolDerivation: true
+    note: Агент, выставленный инструментом другого агента.
+
+  - type: '@n8n/n8n-nodes-langchain.chainLlm'
+    roles: [propagator]
+    llm: true
+    note: Запускает модель, но инструментов не вызывает; инъекция меняет вывод, но не действует.
+
+  - type: '@n8n/n8n-nodes-langchain.openAi'
+    roles: [propagator]
+    llm: true
+
+  - type: '@n8n/n8n-nodes-langchain.googleGemini'
+    roles: [propagator]
+    llm: true
+
+  - type: '@n8n/n8n-nodes-langchain.informationExtractor'
+    roles: [propagator]
+    llm: true
+
+  - type: '@n8n/n8n-nodes-langchain.textClassifier'
+    roles: [propagator]
+    llm: true
+
+  - type: '@n8n/n8n-nodes-langchain.chainSummarization'
+    roles: [propagator]
+    llm: true
+
+  - type: '@n8n/n8n-nodes-langchain.lmChatOpenAi'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatAnthropic'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatOpenRouter'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatAzureOpenAi'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatOllama'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatGroq'
+    roles: [propagator]
+    llm: true
+
+  # ------------------------------------------------------- обвязка LLM
+  - type: '@n8n/n8n-nodes-langchain.memoryBufferWindow'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    note: >-
+      Память диалога подкладывает модели прошлые реплики. Недоверенное содержимое, сохранённое
+      в одном выполнении, возвращается в следующем, поэтому инъекция переживает свой запрос.
+
+  - type: '@n8n/n8n-nodes-langchain.memoryPostgresChat'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    note: Постоянная память диалога; см. memoryBufferWindow.
+
+  - type: '@n8n/n8n-nodes-langchain.memoryRedisChat'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+
+  - type: '@n8n/n8n-nodes-langchain.outputParserStructured'
+    roles: [sanitizer, propagator]
+    sanitizer: { kind: schema-validation, strength: weak }
+    note: >-
+      Загоняет вывод модели в схему. Ограничивает форму, а не смысл: схема со свободным
+      текстовым полем пропустит вставленную инструкцию нетронутой.
+
+  - type: '@n8n/n8n-nodes-langchain.outputParserItemList'
+    roles: [sanitizer, propagator]
+    sanitizer: { kind: schema-validation, strength: weak }
+
+  - type: '@n8n/n8n-nodes-langchain.documentDefaultDataLoader'
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    note: >-
+      Загружает документы в векторное хранилище. Кто может добавить документ в корпус, тот
+      может позже подложить модели инструкции — путь отравления RAG.
+
+  - type: '@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.embeddingsOpenAi'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.embeddingsGoogleGemini'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.embeddingsOllama'
+    roles: [propagator]
+
+  # ----------------------------------------------- векторные хранилища
+  - type: '@n8n/n8n-nodes-langchain.vectorStoreQdrant'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    note: Найденные фрагменты — это то, что проиндексировали, включая чужие документы.
+    variants:
+      - when: { mode: [insert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+
+  - type: '@n8n/n8n-nodes-langchain.vectorStorePinecone'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    variants:
+      - when: { mode: [insert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+
+  - type: '@n8n/n8n-nodes-langchain.vectorStoreSupabase'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    variants:
+      - when: { mode: [insert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+
+  - type: '@n8n/n8n-nodes-langchain.vectorStoreInMemory'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+
+  # ------------------------------------------------ инструменты агента
+  - type: '@n8n/n8n-nodes-langchain.toolWorkflow'
+    roles: [propagator]
+    boundary: true
+    noToolDerivation: true
+    note: >-
+      Вызывает другой воркфлоу как инструмент. Его побочные эффекты живут в том воркфлоу,
+      поэтому taint пересекает границу, которую этот анализ не прослеживает: считать
+      непрослеженным, а не безопасным.
+
+  - type: '@n8n/n8n-nodes-langchain.toolCode'
+    roles: [sink]
+    sink: { effect: execute-code, irreversible: true }
+    noToolDerivation: true
+    note: >-
+      Код, написанный автором воркфлоу (параметр jsCode/pythonCode), который агент может решить
+      запустить. Произвольным его пишет не модель: ей достаётся только query или аргументы по
+      inputSchema. Чтобы аргумент стал выполнением, код автора должен быть неаккуратным — это
+      вопрос к EXPRESSION_RCE. Проверено по каталогу n8n 2.32.7 и по 135 нодам библиотеки.
+
+  - type: '@n8n/n8n-nodes-langchain.toolHttpRequest'
+    roles: [source, sink, propagator]
+    source: { trust: untrusted-external }
+    sink: { effect: http-egress, irreversible: true }
+    noToolDerivation: true
+    note: HTTP-запрос, чей URL и тело составляет агент.
+
+  - type: '@n8n/n8n-nodes-langchain.mcpClientTool'
+    roles: [source, sink, propagator]
+    source: { trust: untrusted-external }
+    sink: { effect: http-egress, irreversible: true }
+    noToolDerivation: true
+    note: >-
+      Инструменты с MCP-сервера. И описания инструментов, и их результаты приходят с этого
+      сервера, поэтому враждебный или скомпрометированный сервер вставит инструкции ещё до
+      того, как потекут данные.
+
+  - type: n8n-nodes-mcp.mcpClientTool
+    roles: [source, sink, propagator]
+    source: { trust: untrusted-external }
+    sink: { effect: http-egress, irreversible: true }
+    noToolDerivation: true
+    note: MCP-клиент сообщества; см. штатную ноду выше.
+
+  - type: '@n8n/n8n-nodes-langchain.toolVectorStore'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    noToolDerivation: true
+
+  - type: '@n8n/n8n-nodes-langchain.toolWikipedia'
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    noToolDerivation: true
+    note: Править Википедию может кто угодно.
+
+  - type: '@n8n/n8n-nodes-langchain.toolSerpApi'
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    noToolDerivation: true
+
+  - type: '@n8n/n8n-nodes-langchain.toolThink'
+    roles: [propagator]
+    noToolDerivation: true
+
+  - type: '@n8n/n8n-nodes-langchain.toolCalculator'
+    roles: [propagator]
+    noToolDerivation: true
+
+  # ------------------------------------------------------- мессенджеры
+  - type: n8n-nodes-base.gmail
+    roles: [propagator]
+    variants:
+      - when: { resource: [message], operation: [send, reply] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { resource: [message], operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+        note: Выполнение приостанавливается, пока человек не ответит.
+      - when: { resource: [message, thread], operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+      - when: { operation: [delete, trash] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { resource: [draft], operation: [create] }
+        roles: [sink]
+        sink: { effect: write-database, irreversible: false }
+        note: Черновик не отправлен, поэтому обратим, — но его содержимое всё равно выбрано.
+      - when: { operation: [addLabels, removeLabels, markAsRead, markAsUnread, untrash] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+        note: >-
+          Меняет почтовый ящик, ничего не отправляя, и каждое изменение обратимо. Это всё
+          равно эффект: агент, которому только что прочитанное письмо велит заархивировать
+          оповещение и пометить его прочитанным, ровно это и сделает.
+
+  - type: n8n-nodes-base.emailSend
+    roles: [sink]
+    sink: { effect: send-message, irreversible: true }
+    variants:
+      - when: { operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+
+  - type: n8n-nodes-base.microsoftOutlook
+    roles: [propagator]
+    variants:
+      - when: { resource: [message], operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+      - when: { resource: [message], operation: [send, reply] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { resource: [message], operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+
+  - type: n8n-nodes-base.telegram
+    roles: [propagator]
+    variants:
+      - when: { operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+      - when:
+          operation:
+            [
+              sendMessage,
+              sendPhoto,
+              sendVideo,
+              sendAudio,
+              sendDocument,
+              sendAnimation,
+              sendSticker,
+              sendLocation,
+              sendMediaGroup,
+              sendRichMessage,
+              editMessageText,
+            ]
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { operation: [deleteMessage] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { resource: [file], operation: [get] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.slack
+    roles: [propagator]
+    variants:
+      - when: { operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+      - when: { resource: [message], operation: [post, update, schedule] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { resource: [message], operation: [getPermalink, replies, search, history] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+      - when: { resource: [file], operation: [upload] }
+        roles: [sink]
+        sink: { effect: write-file, irreversible: true }
+      - when: { operation: [delete, deleteScheduled, remove, archive, kick] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+
+  - type: n8n-nodes-base.discord
+    roles: [propagator]
+    variants:
+      - when: { operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+      - when: { operation: [send, sendLegacy, update, react] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { operation: [deleteMessage, deleteChannel, roleRemove] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [create, roleAdd] }
+        roles: [sink, propagator]
+        sink: { effect: admin-api, irreversible: true }
+        note: Создаёт каналы или выдаёт роли — изменение прав, а не сообщение.
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.whatsApp
+    roles: [propagator]
+    variants:
+      - when: { operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+      - when: { operation: [send, sendTemplate] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { operation: [mediaUpload] }
+        roles: [sink]
+        sink: { effect: write-file, irreversible: true }
+      - when: { operation: [mediaDelete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [mediaUrlGet] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.mattermost
+    roles: [sink]
+    sink: { effect: send-message, irreversible: true }
+
+  - type: n8n-nodes-base.twilio
+    roles: [sink]
+    sink: { effect: send-message, irreversible: true }
+
+  # -------------------------------------------------------- публикация
+  - type: n8n-nodes-base.linkedIn
+    roles: [sink]
+    sink: { effect: publish-content, irreversible: true }
+
+  - type: n8n-nodes-base.facebookGraphApi
+    roles: [source, sink, propagator]
+    source: { trust: untrusted-external }
+    sink: { effect: publish-content, irreversible: true }
+
+  - type: n8n-nodes-base.youTube
+    roles: [propagator]
+    variants:
+      - when: { operation: [upload, update] }
+        roles: [sink]
+        sink: { effect: publish-content, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: '@blotato/n8n-nodes-blotato.blotato'
+    roles: [sink]
+    sink: { effect: publish-content, irreversible: true }
+    note: Нода сообщества, кросс-постящая в соцсети.
+
+  # ------------------------------------------------------- базы данных
+  - type: n8n-nodes-base.postgres
+    roles: [propagator]
+    variants:
+      - when: { operation: [insert, update, upsert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [deleteTable] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [executeQuery] }
+        roles: [source, sink, propagator]
+        source: { trust: semi-trusted }
+        sink: { effect: write-database, irreversible: true }
+        note: Сырой SQL; сам запрос может собираться из заражённых значений.
+      - when: { operation: [select] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.mySql
+    roles: [propagator]
+    variants:
+      - when: { operation: [insert, update, upsert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [deleteTable] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [executeQuery] }
+        roles: [source, sink, propagator]
+        source: { trust: semi-trusted }
+        sink: { effect: write-database, irreversible: true }
+        note: Сырой SQL; сам запрос может собираться из заражённых значений.
+      - when: { operation: [select] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.mongoDb
+    roles: [propagator]
+    variants:
+      - when: { operation: [insert, update, findOneAndReplace, findOneAndUpdate] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [find, aggregate] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.redis
+    roles: [propagator]
+    variants:
+      - when: { operation: [set, incr, publish, push] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, keys, pop, info] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.supabase
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.airtable
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, upsert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [deleteRecord] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, search, getMany] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.dataTable
+    roles: [propagator]
+    variants:
+      - when: { operation: [insert, update, upsert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [deleteRows] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, rowExists, rowNotExists] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.notion
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, append] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [archive] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, search] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.googleSheets
+    roles: [propagator]
+    variants:
+      - when: { resource: [sheet], operation: [append, update, appendOrUpdate] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [clear, delete, remove, deleteSpreadsheet] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { resource: [sheet], operation: [read] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+      - when: { resource: [spreadsheet], operation: [create] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+
+  # ------------------------------------------------- файлы и документы
+  - type: n8n-nodes-base.googleDrive
+    roles: [propagator]
+    variants:
+      - when: { resource: [file], operation: [upload, update, copy, move, createFromText] }
+        roles: [sink, propagator]
+        sink: { effect: write-file, irreversible: true }
+      - when: { resource: [file], operation: [share] }
+        roles: [sink]
+        sink: { effect: admin-api, irreversible: true }
+        note: Меняет, кто может прочитать файл, — шаг, превращающий утечку в публичную.
+      - when: { operation: [deleteFile, deleteFolder, deleteDrive] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [download, get, list, search] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+        note: Содержимое файла приходит от того, кто его загрузил.
+
+  - type: n8n-nodes-base.googleDocs
+    roles: [propagator]
+    variants:
+      - when: { operation: [update, create] }
+        roles: [sink, propagator]
+        sink: { effect: write-file, irreversible: true }
+      - when: { operation: [get] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.readWriteFile
+    roles: [propagator]
+    variants:
+      - when: { operation: [write] }
+        roles: [sink]
+        sink: { effect: write-file, irreversible: true }
+        note: Пишет в файловую систему машины с n8n.
+      - when: { operation: [read] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.ftp
+    roles: [propagator]
+    variants:
+      - when: { operation: [upload, rename] }
+        roles: [sink]
+        sink: { effect: write-file, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [download, list] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.awsS3
+    roles: [propagator]
+    variants:
+      - when: { operation: [upload, copy] }
+        roles: [sink]
+        sink: { effect: write-file, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [download, getAll] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.extractFromFile
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    note: >-
+      Достаёт текст из загруженного PDF, таблицы или документа. Текст выбран атакующим всякий
+      раз, когда файл выбран им же, — вектор «инструкции, спрятанные в PDF».
+
+  - type: n8n-nodes-base.convertToFile
+    roles: [propagator]
+
+  - type: n8n-nodes-base.html
+    roles: [propagator]
+    note: Извлекает из HTML, обычно скрапленного; содержимым управляет автор страницы.
+
+  - type: n8n-nodes-base.markdown
+    roles: [propagator]
+
+  - type: n8n-nodes-base.editImage
+    roles: [propagator]
+
+  # --------------------------------------------------- календарь и CRM
+  - type: n8n-nodes-base.googleCalendar
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, availability] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.hubspot
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, upsert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+
+  - type: n8n-nodes-base.salesforce
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, upsert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+
+  - type: n8n-nodes-base.pipedrive
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+
+  # ------------------------------------------------------------ деньги
+  - type: n8n-nodes-base.stripe
+    roles: [propagator]
+    variants:
+      - when: { resource: [charge, meterEvent], operation: [create, update] }
+        roles: [sink]
+        sink: { effect: payment, irreversible: true }
+      - when: { resource: [customer, coupon, source, token], operation: [create, update] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete, remove] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+    note: >-
+      Деньги двигают только списания и тарифицируемые события; создание клиента или купона —
+      нет. PayPal отсутствует сознательно: его нет в каталоге нод, по которому построен этот
+      реестр, а непроверяемое правило про платежи хуже, чем никакого.
+
+  # ------------------------------------------------- администрирование
+  - type: n8n-nodes-base.n8n
+    roles: [propagator]
+    note: >-
+      Управляет собственным API инстанса n8n: умеет создавать, менять и активировать
+      воркфлоу, что делает его целью для повышения привилегий, а не обычной интеграцией.
+    variants:
+      - when: { operation: [create, update, activate, deactivate] }
+        roles: [sink, propagator]
+        sink: { effect: admin-api, irreversible: true }
+        note: Запись или активация воркфлоу превращает данные в новое исполняемое поведение.
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, generate, getSchema, getVersion] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.github
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, edit, createComment] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, getIssues] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  # ------------------------------------------------ управление потоком
+  - type: n8n-nodes-base.if
+    roles: [propagator, sanitizer]
+    sanitizer: { kind: conditional, strength: weak }
+    note: >-
+      Ветвление является гейтом, только если его условие действительно проверяет заражённое
+      значение. Большинство этого не делает — они маршрутизируют по посторонним полям. Решает
+      фаза 4; слабый гейт защитой не является.
+
+  - type: n8n-nodes-base.switch
+    roles: [propagator, sanitizer]
+    sanitizer: { kind: conditional, strength: weak }
+
+  - type: n8n-nodes-base.filter
+    roles: [propagator, sanitizer]
+    sanitizer: { kind: conditional, strength: weak }
+
+  - type: n8n-nodes-base.set
+    roles: [propagator]
+  - type: n8n-nodes-base.merge
+    roles: [propagator]
+  - type: n8n-nodes-base.splitOut
+    roles: [propagator]
+  - type: n8n-nodes-base.splitInBatches
+    roles: [propagator]
+  - type: n8n-nodes-base.aggregate
+    roles: [propagator]
+  - type: n8n-nodes-base.itemLists
+    roles: [propagator]
+  - type: n8n-nodes-base.limit
+    roles: [propagator]
+  - type: n8n-nodes-base.sort
+    roles: [propagator]
+  - type: n8n-nodes-base.summarize
+    roles: [propagator]
+  - type: n8n-nodes-base.removeDuplicates
+    roles: [propagator]
+  - type: n8n-nodes-base.dateTime
+    roles: [propagator]
+  - type: n8n-nodes-base.crypto
+    roles: [propagator]
+  - type: n8n-nodes-base.noOp
+    roles: [propagator]
+  - type: n8n-nodes-base.stopAndError
+    roles: []
+  - type: n8n-nodes-base.stickyNote
+    roles: []
+    note: Комментарий на холсте; никогда не выполняется.
+
+  - type: n8n-nodes-base.wait
+    roles: [propagator]
+    variants:
+      - when: { resume: [webhook, form] }
+        roles: [source, propagator]
+        source: { trust: untrusted-public }
+        note: >-
+          Возобновление через вебхук или форму открывает публичный URL, который продолжает
+          выполнение с тем, что подсунет вызывающий.
+
+  - type: n8n-nodes-base.executeWorkflow
+    roles: [propagator]
+    boundary: true
+    note: >-
+      Запускает другой воркфлоу. Его sink-и отсюда невидимы, поэтому путь, кончающийся на
+      этой ноде, не безопасен, а не прослежен.
+
+  # ------------------------------------------ дополнительные источники
+  - type: n8n-nodes-base.rssFeedReadTrigger
+    roles: [source]
+    source: { trust: untrusted-external }
+    note: Содержимое ленты пишет тот, кто ею управляет.
+
+  - type: n8n-nodes-base.jotFormTrigger
+    roles: [source]
+    source: { trust: untrusted-public }
+    note: Отправки сторонней формы; заполнить может любой обладатель ссылки.
+
+  - type: n8n-nodes-base.typeformTrigger
+    roles: [source]
+    source: { trust: untrusted-public }
+
+  - type: n8n-nodes-base.readBinaryFile
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    note: Содержимое файла приходит от того, кто его туда положил.
+
+  - type: n8n-nodes-base.readBinaryFiles
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+
+  # Инструменты скрапинга и браузера: всё, что они возвращают, написал автор страницы.
+  - type: '@apify/n8n-nodes-apify.apify'
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    note: Скрапленные страницы по определению подконтрольны атакующему.
+
+  - type: '@tavily/n8n-nodes-tavily.tavilyTool'
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    noToolDerivation: true
+    note: Результаты веб-поиска, скармливаемые агенту.
+
+  - type: '@mendable/n8n-nodes-firecrawl.firecrawlTool'
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    noToolDerivation: true
+
+  - type: n8n-nodes-base.airtop
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    note: Автоматизация браузера; содержимым страницы управляет её автор.
+    variants:
+      - when: { operation: [scrape, query, takeScreenshot, load, getLiveView] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  # ------------------------------------------------ дополнительные LLM
+  - type: n8n-nodes-base.openAi
+    roles: [propagator]
+    llm: true
+    note: Устаревшая нода OpenAI, вытесненная langchain-версией.
+
+  - type: n8n-nodes-base.perplexity
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    llm: true
+    note: Ответы синтезируются из живой веб-выдачи, поэтому несут внешнее содержимое.
+
+  - type: '@n8n/n8n-nodes-langchain.lmChatMistralCloud'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatDeepSeek'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatXAiGrok'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmChatCohere'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmOllama'
+    roles: [propagator]
+    llm: true
+  - type: '@n8n/n8n-nodes-langchain.lmOpenAi'
+    roles: [propagator]
+    llm: true
+
+  - type: '@n8n/n8n-nodes-langchain.chat'
+    roles: [propagator]
+    variants:
+      - when: { operation: [sendAndWait] }
+        roles: [sink, sanitizer]
+        sink: { effect: send-message, irreversible: true }
+        sanitizer: { kind: human-approval, strength: strong }
+        note: Спрашивает пользователя в чате и ждёт — гейт human-in-the-loop прямо в чате.
+      - when: { operation: [send] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+
+  # ---------------------------------------- дополнительная обвязка LLM
+  - type: '@n8n/n8n-nodes-langchain.outputParserAutofixing'
+    roles: [sanitizer, propagator]
+    sanitizer: { kind: schema-validation, strength: weak }
+    note: Переспрашивает модель, чтобы починить кривой вывод; ограничивает форму, а не намерение.
+
+  - type: '@n8n/n8n-nodes-langchain.memoryMongoDbChat'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    note: Постоянная память диалога; см. memoryBufferWindow.
+
+  - type: '@n8n/n8n-nodes-langchain.rerankerCohere'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.textSplitterTokenSplitter'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.textSplitterCharacterTextSplitter'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.embeddingsAzureOpenAi'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.embeddingsCohere'
+    roles: [propagator]
+  - type: '@n8n/n8n-nodes-langchain.embeddingsMistralCloud'
+    roles: [propagator]
+
+  - type: '@n8n/n8n-nodes-langchain.vectorStoreMongoDBAtlas'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    variants:
+      - when: { mode: [insert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+
+  - type: '@n8n/n8n-nodes-langchain.vectorStorePGVector'
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+    variants:
+      - when: { mode: [insert] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: false }
+
+  - type: n8n-nodes-qdrant.qdrant
+    roles: [source, propagator]
+    source: { trust: semi-trusted }
+
+  # ----------------------------------------- дополнительные интеграции
+  - type: n8n-nodes-base.twitter
+    roles: [propagator]
+    variants:
+      - when: { resource: [tweet], operation: [create, retweet] }
+        roles: [sink]
+        sink: { effect: publish-content, irreversible: true }
+      - when: { resource: [directMessage], operation: [create] }
+        roles: [sink]
+        sink: { effect: send-message, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [search, searchUser] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.reddit
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, reply] }
+        roles: [sink]
+        sink: { effect: publish-content, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, search] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+        note: Посты и комментарии пишет кто угодно.
+
+  - type: n8n-nodes-base.wordpress
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update] }
+        roles: [sink]
+        sink: { effect: publish-content, irreversible: true }
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.microsoftOneDrive
+    roles: [propagator]
+    variants:
+      - when: { operation: [upload, copy, move, rename, create] }
+        roles: [sink, propagator]
+        sink: { effect: write-file, irreversible: true }
+      - when: { operation: [share] }
+        roles: [sink]
+        sink: { effect: admin-api, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [download, get, search, getChildren] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.nocoDb
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, upsert, link, upload] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete, unlink] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, list, count, search] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.gitlab
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, edit, createComment, update] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, getIssues, getRepositories, list] }
+        roles: [source, propagator]
+        source: { trust: untrusted-external }
+
+  - type: n8n-nodes-base.googleTasks
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.googleSlides
+    roles: [propagator]
+
+  - type: n8n-nodes-base.clickUp
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, add, setCustomField] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete, remove] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  - type: n8n-nodes-base.asana
+    roles: [propagator]
+    variants:
+      - when: { operation: [create, update, add, move] }
+        roles: [sink, propagator]
+        sink: { effect: write-database, irreversible: true }
+      - when: { operation: [delete, remove] }
+        roles: [sink]
+        sink: { effect: delete-data, irreversible: true }
+      - when: { operation: [get, getAll, search] }
+        roles: [source, propagator]
+        source: { trust: semi-trusted }
+
+  # ------------------------------------------------ ещё преобразования
+  - type: n8n-nodes-base.xml
+    roles: [propagator]
+  - type: n8n-nodes-base.compareDatasets
+    roles: [propagator]
+  - type: n8n-nodes-base.spotify
+    roles: [propagator]
+  - type: n8n-nodes-base.rssFeedReadTool
+    roles: [source, propagator]
+    source: { trust: untrusted-external }
+    noToolDerivation: true
+  - type: n8n-nodes-base.dateTimeTool
+    roles: [propagator]
+    noToolDerivation: true
+  - type: n8n-nodes-base.cryptoTool
+    roles: [propagator]
+    noToolDerivation: true

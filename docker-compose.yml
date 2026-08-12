@@ -1,0 +1,65 @@
+# Полигон фазы 8: настоящий n8n с уязвимым воркфлоу и его же защищённой версией.
+#
+#   docker compose up -d          поднять
+#   open http://localhost:5678    оба воркфлоу уже импортированы
+#   docker compose down -v        снести вместе с данными
+#
+# Версия n8n зафиксирована: из каталога именно этой версии извлечён
+# packages/core/rules/node-defaults.json, и на ней меряли всё остальное.
+#
+# Замер ASR отдельного контейнера не требует и в этот compose не входит: раннер
+# ходит к модели напрямую (packages/range/run.mjs, см. docs/range-methodology.md).
+# n8n здесь нужен, чтобы воркфлоу полигона можно было открыть на настоящем холсте
+# и просканировать тем же CLI, что и чужие воркфлоу.
+
+services:
+  # CRM полигона: та самая таблица, в которую ходят инструменты
+  # get_customer_notes и update_crm.
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: range
+      POSTGRES_PASSWORD: range
+      POSTGRES_DB: range
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./packages/range/docker/init-crm.sql:/docker-entrypoint-initdb.d/init-crm.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U range -d range']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Импорт воркфлоу до старта n8n. Отдельным сервисом, потому что entrypoint
+  # образа подставляет всё, что ему передали, аргументами к `n8n`, и обычным
+  # command тут не обойтись.
+  n8n-import:
+    image: docker.n8n.io/n8nio/n8n:2.32.7
+    command: import:workflow --separate --input=/workflows
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./packages/range/workflows:/workflows:ro
+    environment:
+      N8N_ENCRYPTION_KEY: n8n-sentinel-range-local-only
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.32.7
+    ports:
+      - '${N8N_PORT:-5678}:5678'
+    volumes:
+      - n8n-data:/home/node/.n8n
+    environment:
+      N8N_ENCRYPTION_KEY: n8n-sentinel-range-local-only
+      # Полигон живёт на одной машине и наружу не смотрит.
+      N8N_SECURE_COOKIE: 'false'
+      N8N_RUNNERS_ENABLED: 'true'
+      GENERIC_TIMEZONE: Europe/Amsterdam
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n-import:
+        condition: service_completed_successfully
+
+volumes:
+  n8n-data:
+  postgres-data:

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Собирать надо ДО линтера: правила typescript-eslint типозависимы, а типы пакета
+      # `@n8n-sentinel/core` живут в его `dist/*.d.ts`. На чистой машине их ещё нет, и линтер
+      # выдаёт 27 ошибок вида «Unsafe call of a type that could not be resolved». Локально это
+      # незаметно, потому что `dist` остаётся от прошлых сборок, — поймано первым же прогоном CI.
+      - name: Сборка
+        run: pnpm build
+
+      - name: Форматирование
+        run: pnpm format:check
+
+      - name: Линтер
+        run: pnpm lint
+
+      - name: Проверка типов
+        run: pnpm typecheck
+
+      # Фикстуры закоммичены, поэтому тесты никогда не ходят в сеть.
+      - name: Тесты
+        run: pnpm test
+
+      # Визуализатор собирается бандлером, а не компилируется tsc, поэтому ничто выше не
+      # заметило бы его поломки.
+      - name: Сборка визуализатора
+        run: pnpm web:build

@@ -1,0 +1,160 @@
+# GitHub Action: сканирует воркфлоу n8n в репозитории и публикует находки.
+#
+# Делает три вещи: кладёт SARIF в Security tab, пишет сводку в журнал сборки и (по желанию)
+# оставляет комментарий в pull request. Идентификаторы входов и выходов английские — их читает
+# GitHub, а не человек.
+#
+# Проверено на демо-PR: комментарий публикуется, выходы findings/critical совпадают с локальным
+# сканом, SARIF принимается Code Scanning.
+name: n8n-sentinel
+description: Ищет пути, по которым недоверенный ввод доходит до необратимого действия в воркфлоу n8n
+author: n8n-sentinel contributors
+
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  path:
+    description: Файл или каталог с воркфлоу n8n
+    required: false
+    default: .
+  fail-on:
+    description: Ронять сборку, начиная с этой полосы severity — critical, high, medium или low
+    required: false
+    default: high
+  sarif-file:
+    description: Куда положить отчёт SARIF
+    required: false
+    default: sentinel.sarif
+  upload-sarif:
+    description: Загружать ли SARIF в GitHub Code Scanning (нужно разрешение security-events write)
+    required: false
+    default: 'true'
+  comment:
+    description: Оставлять ли сводку комментарием в pull request
+    required: false
+    default: 'true'
+  token:
+    description: Токен для комментария в pull request
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  sarif-file:
+    description: Путь к созданному отчёту SARIF
+    value: ${{ inputs.sarif-file }}
+  findings:
+    description: Сколько всего находок
+    value: ${{ steps.scan.outputs.findings }}
+  critical:
+    description: Сколько находок уровня critical
+    value: ${{ steps.scan.outputs.critical }}
+  exit-code:
+    description: Код возврата сканера — 0 чисто, 1 есть находки на полосе fail-on, 2 скан не состоялся
+    value: ${{ steps.scan.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    # Сканер собирается из исходников: в npm он не публикуется, а зависимость CLI от core
+    # записана как `workspace:*`, поэтому установка пакета из git тоже не сработала бы.
+    - name: Сборка сканера
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm install -g pnpm@11
+        pnpm install --frozen-lockfile
+        pnpm build
+        mkdir -p "$RUNNER_TEMP/bin"
+        printf '#!/usr/bin/env bash\nexec node "%s/packages/cli/dist/index.js" "$@"\n' "$PWD" \
+          > "$RUNNER_TEMP/bin/n8n-sentinel"
+        chmod +x "$RUNNER_TEMP/bin/n8n-sentinel"
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+    - name: Скан
+      id: scan
+      shell: bash
+      run: |
+        set -uo pipefail
+
+        # SARIF для Security tab и JSON для подсчёта — один и тот же анализ, два представления.
+        n8n-sentinel scan "${{ inputs.path }}" --format sarif > "${{ inputs.sarif-file }}"
+        n8n-sentinel scan "${{ inputs.path }}" --format json > sentinel-report.json
+
+        # Код возврата берётся с человекочитаемого прогона: 0 чисто, 1 есть находки на полосе,
+        # 2 скан не состоялся. Второй запуск нужен ещё и для сводки.
+        set +e
+        n8n-sentinel scan "${{ inputs.path }}" --fail-on "${{ inputs.fail-on }}" > sentinel-human.txt
+        # Имя переменной латиницей не по прихоти: bash не поддерживает не-ASCII в именах,
+        # и `код=$?` молча превращался в команду («код=1: command not found»), а в выход
+        # уезжала строка «$код». Из-за этого проверка кода возврата ниже не срабатывала
+        # никогда, и Action не ронял сборку ни при каких находках.
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+        # Числа берутся из конверта отчёта: у него есть summary, считать находки заново не надо.
+        node -e '
+          const фс = require("fs");
+          const о = JSON.parse(фс.readFileSync("sentinel-report.json", "utf8"));
+          const с = о.summary ?? {};
+          const п = с.bySeverity ?? {};
+          фс.appendFileSync(process.env.GITHUB_OUTPUT,
+            `findings=${с.findings ?? 0}\ncritical=${п.critical ?? 0}\nhigh=${п.high ?? 0}\n`);
+        '
+
+        {
+          echo "## n8n-sentinel"
+          echo
+          echo "Просканировано: \`${{ inputs.path }}\`"
+          echo
+          echo '```'
+          head -c 60000 sentinel-human.txt
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Код 2 означает, что файл не удалось прочитать, — это поломка сборки, а не находка.
+        if [ "$code" = "2" ]; then
+          echo "::error::скан не состоялся: путь не удалось прочитать"
+          exit 2
+        fi
+
+    - name: Комментарий в pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        {
+          echo "### n8n-sentinel: находок ${{ steps.scan.outputs.findings }}, из них critical ${{ steps.scan.outputs.critical }}"
+          echo
+          echo "<details><summary>Отчёт целиком</summary>"
+          echo
+          echo '```'
+          head -c 50000 sentinel-human.txt
+          echo '```'
+          echo
+          echo "</details>"
+        } > sentinel-comment.md
+        gh pr comment "${{ github.event.pull_request.number }}" --body-file sentinel-comment.md
+
+    - uses: github/codeql-action/upload-sarif@v3
+      if: inputs.upload-sarif == 'true'
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: n8n-sentinel
+
+    # Ронять сборку надо последним шагом: SARIF и комментарий должны уехать даже тогда, когда
+    # находки есть. Код 2 уже уронил сборку выше.
+    - name: Итог
+      if: steps.scan.outputs.exit-code == '1'
+      shell: bash
+      run: |
+        echo "::error::найдены находки на полосе ${{ inputs.fail-on }} и выше"
+        exit 1

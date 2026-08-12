@@ -1,0 +1,869 @@
+/*
+ * Две поверхности, и это сознательно.
+ *
+ * Внутри холста цвета взяты у самого n8n — считаны с работающего инстанса 2.32
+ * (`--color--neutral-*`, `--canvas--*`): те же серые, та же точечная сетка, ноды шесть клеток
+ * в квадрате. Пользователь должен узнать свой редактор. Всё, что вне холста — панель сверху,
+ * список находок, цвета severity, подсветка пути, — наше и использует ту же палитру, что и
+ * графики исследования корпуса, чтобы проект читался как одна работа.
+ */
+
+:root {
+  --canvas-bg: #f5f5f5;
+  --canvas-dot: #999;
+  --node-bg: #fff;
+  --node-border: #d9d9d9;
+  --node-ink: #171717;
+  --edge: #b0b0b0;
+  --sticky: #ffd97d;
+
+  --surface: #fff;
+  --surface-2: #fafafa;
+  --line: #e5e5e5;
+  --ink: #1b1b1b;
+  --muted: #6b6b6b;
+
+  --critical: #a4243b;
+  --high: #c2521f;
+  --medium: #8a6d0b;
+  --low: #4a6fa5;
+
+  --source: #147c8c;
+  --agent: #6d28d9;
+  --sink: #b45309;
+  --gate: #15803d;
+
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 6%), 0 8px 24px rgb(0 0 0 / 6%);
+  --sans: ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Inter, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Mono', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas-bg: #171717;
+    --canvas-dot: #444;
+    --node-bg: #262626;
+    --node-border: #424242;
+    --node-ink: #fafafa;
+    --edge: #575757;
+    --sticky: #8a6a1f;
+
+    --surface: #1c1c1c;
+    --surface-2: #232323;
+    --line: #333;
+    --ink: #f2f2f2;
+    --muted: #9a9a9a;
+
+    --critical: #e2687f;
+    --high: #f0834e;
+    --medium: #dcc04a;
+    --low: #8fb0e0;
+
+    --source: #45b6c7;
+    --agent: #a78bfa;
+    --sink: #e0913f;
+    --gate: #4ade80;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 30%);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* `display` в классе перебивает правило браузера для [hidden], а все оверлеи ниже его
+   задают. Без этого область для перетаскивания и пустое состояние навсегда остаются поверх
+   холста. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  /* Без явной колонки неявная растягивается по min-content самого широкого ребёнка — то есть
+     верхней панели, — и список ниже наследует эту ширину, уезжая за край телефона. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------- верхняя панель */
+
+.topbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+}
+
+.brand-mark rect {
+  fill: var(--critical);
+}
+
+.brand-mark path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.workflow {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  padding-left: 16px;
+}
+
+.workflow-name {
+  overflow: hidden;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.select-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+select,
+.button {
+  height: 30px;
+  min-width: 0;
+  max-width: 260px;
+  flex-shrink: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  padding-inline: 10px;
+}
+
+.button {
+  cursor: pointer;
+}
+
+.button:hover,
+select:hover {
+  border-color: var(--muted);
+}
+
+/* ------------------------------------------------------------- раскладка */
+
+.layout {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
+.stage {
+  position: relative;
+  overflow: hidden;
+  background: var(--canvas-bg);
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas.is-panning {
+  cursor: grabbing;
+}
+
+.canvas .dot {
+  fill: var(--canvas-dot);
+  opacity: 0.45;
+}
+
+/* ------------------------------------------------------------ холст: n8n */
+
+.node-body {
+  fill: var(--node-bg);
+  stroke: var(--node-border);
+  stroke-width: 1.5;
+}
+
+.node-monogram {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  dominant-baseline: central;
+  text-anchor: middle;
+  user-select: none;
+}
+
+.node-label {
+  fill: var(--node-ink);
+  font-size: 12px;
+  text-anchor: middle;
+  user-select: none;
+}
+
+.node {
+  cursor: pointer;
+}
+
+.node.shape-sub .node-monogram {
+  font-size: 16px;
+}
+
+.node.is-disabled {
+  opacity: 0.45;
+}
+
+.node.is-disabled .node-body {
+  stroke-dasharray: 4 4;
+}
+
+.node:hover .node-body {
+  stroke: var(--muted);
+}
+
+.node:focus-visible {
+  outline: none;
+}
+
+.node:focus-visible .node-body {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1.5;
+}
+
+.edge marker,
+.canvas marker path {
+  fill: var(--edge);
+}
+
+.edge.kind-attachment,
+.edge.kind-return {
+  stroke-dasharray: 6 4;
+}
+
+.sticky rect {
+  fill: var(--sticky);
+  opacity: 0.45;
+}
+
+.sticky text {
+  fill: var(--node-ink);
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+/* --------------------------------------------- холст: то, что добавляем мы */
+
+.node-badge {
+  stroke: var(--canvas-bg);
+  stroke-width: 2;
+}
+
+.node-badge.severity-critical {
+  fill: var(--critical);
+}
+.node-badge.severity-high {
+  fill: var(--high);
+}
+.node-badge.severity-medium {
+  fill: var(--medium);
+}
+.node-badge.severity-low {
+  fill: var(--low);
+}
+
+.node.role-source .node-body {
+  stroke: var(--source);
+}
+.node.role-agent .node-body {
+  stroke: var(--agent);
+  stroke-width: 2;
+}
+.node.role-sink .node-body {
+  stroke: var(--sink);
+}
+.node.role-gate-strong .node-body {
+  stroke: var(--gate);
+  stroke-width: 2;
+}
+.node.role-gate .node-body {
+  stroke: var(--gate);
+  stroke-dasharray: 5 4;
+}
+.node.role-unknown .node-body {
+  stroke-dasharray: 3 3;
+}
+
+.node.role-source .node-monogram {
+  fill: var(--source);
+}
+.node.role-agent .node-monogram {
+  fill: var(--agent);
+}
+.node.role-sink .node-monogram {
+  fill: var(--sink);
+}
+
+.canvas.has-selection .node,
+.canvas.has-selection .edge,
+.canvas.has-selection .sticky {
+  opacity: 0.22;
+  transition: opacity 120ms ease;
+}
+
+.canvas.has-selection .node.is-hot,
+.canvas.has-selection .edge.is-hot {
+  opacity: 1;
+}
+
+.node.is-end .node-body {
+  stroke-width: 2.5;
+}
+
+.node.is-focused .node-body {
+  animation: pulse 900ms ease-out;
+}
+
+@keyframes pulse {
+  from {
+    stroke-width: 8;
+  }
+  to {
+    stroke-width: 1.5;
+  }
+}
+
+.overlay-edge {
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 3;
+}
+
+.overlay-edge.is-flowing {
+  stroke-dasharray: 7 11;
+  animation: flow 900ms linear infinite;
+}
+
+.overlay-edge.is-derived {
+  stroke-dasharray: 2 6;
+  stroke-linecap: round;
+  stroke-width: 2.5;
+}
+
+.overlay-label {
+  fill: currentcolor;
+  font-size: 11px;
+  font-weight: 560;
+  paint-order: stroke;
+  stroke: var(--canvas-bg);
+  stroke-width: 4;
+  text-anchor: middle;
+}
+
+.severity-critical {
+  color: var(--critical);
+}
+.severity-high {
+  color: var(--high);
+}
+.severity-medium {
+  color: var(--medium);
+}
+.severity-low {
+  color: var(--low);
+}
+
+@keyframes flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-edge.is-flowing {
+    animation: none;
+    stroke-dasharray: none;
+    opacity: 0.55;
+  }
+
+  .node.is-focused .node-body {
+    animation: none;
+  }
+}
+
+/* --------------------------------------------------------- обвязка холста */
+
+.stage-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  gap: 6px;
+}
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: inherit;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.icon-button.wide {
+  width: auto;
+  font-size: 12px;
+  padding-inline: 10px;
+}
+
+.stage-legend {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 40%;
+  justify-content: flex-end;
+  gap: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--muted);
+  border-radius: 3px;
+}
+
+.swatch.source {
+  border-color: var(--source);
+}
+.swatch.agent {
+  border-color: var(--agent);
+}
+.swatch.sink {
+  border-color: var(--sink);
+}
+.swatch.gate {
+  border-color: var(--gate);
+}
+.swatch.derived {
+  height: 0;
+  border: 0;
+  border-top: 2px dashed var(--critical);
+  border-radius: 0;
+}
+
+.dropzone {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  background: color-mix(in srgb, var(--canvas-bg) 75%, transparent);
+  place-items: center;
+}
+
+.dropzone-inner {
+  border: 2px dashed var(--critical);
+  border-radius: 16px;
+  padding: 28px 44px;
+  color: var(--critical);
+  font-size: 16px;
+  font-weight: 560;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 24px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.empty h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.empty p {
+  max-width: 42ch;
+  margin: 0;
+  color: var(--muted);
+}
+
+kbd {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------------- панель */
+
+.panel {
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  /* Имена нод, идентификаторы правил и параметры в кавычках длинные, и переносить их не по
+     чему. Без этого они задают ширину страницы, и всё уезжает вбок. */
+  overflow-wrap: anywhere;
+}
+
+.panel-head {
+  position: sticky;
+  top: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 12px 16px;
+}
+
+.counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.count b {
+  color: currentcolor;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.count.severity-critical b {
+  color: var(--critical);
+}
+.count.severity-high b {
+  color: var(--high);
+}
+.count.severity-medium b {
+  color: var(--medium);
+}
+.count.severity-low b {
+  color: var(--low);
+}
+
+.panel-sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.warnings {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  padding: 10px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.warnings h3 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.warnings ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.panel-clean {
+  padding: 24px 16px;
+  color: var(--muted);
+}
+
+.panel-clean h2 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finding {
+  border-bottom: 1px solid var(--line);
+  /* Отступ под липкую сводку сверху, которая иначе закрыла бы строку, к которой прокрутили. */
+  scroll-margin-top: 72px;
+}
+
+.finding-head {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  border: 0;
+  background: none;
+  padding: 11px 16px;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.finding-head:hover {
+  background: var(--surface-2);
+}
+
+.finding.is-open .finding-head {
+  background: var(--surface-2);
+}
+
+.chip {
+  border-radius: 999px;
+  background: color-mix(in srgb, currentcolor 14%, transparent);
+  padding: 1px 7px;
+  color: currentcolor;
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.chip.muted {
+  color: var(--muted);
+}
+
+.finding-rule {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.finding-title {
+  flex-basis: 100%;
+  color: var(--ink);
+}
+
+.finding-detail {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 18px;
+}
+
+.detail-text {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.finding-detail h3 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.remediation p {
+  margin: 0 0 12px;
+}
+
+.chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.node-chip {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 2px 7px;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-chip:hover {
+  border-color: var(--muted);
+}
+
+.node-chip.is-source {
+  border-color: var(--source);
+  color: var(--source);
+}
+
+.node-chip.is-agent {
+  border-color: var(--agent);
+  color: var(--agent);
+}
+
+.node-chip.is-sink {
+  border-color: var(--sink);
+  color: var(--sink);
+}
+
+.arrow {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.arrow.is-derived {
+  color: var(--critical);
+}
+
+.facts {
+  margin: 14px 0 0;
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.facts li + li {
+  margin-top: 4px;
+}
+
+/* --------------------------------------------------------------- мобильные */
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 52vh minmax(0, 1fr);
+  }
+
+  .panel {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 10px 12px;
+  }
+
+  .brand {
+    flex-shrink: 0;
+  }
+
+  .workflow {
+    /* Собственная строка. `width: 100%` проигрывает базису из `flex: 1` выше, и заголовок
+       начинает драться с кнопками за одну строку. */
+    order: 3;
+    flex: 1 0 100%;
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .actions {
+    min-width: 0;
+    flex: 1;
+    justify-content: flex-end;
+  }
+
+  .select-label {
+    display: none;
+  }
+
+  select {
+    flex: 0 1 auto;
+    max-width: 44vw;
+  }
+
+  .stage-legend {
+    display: none;
+  }
+}
